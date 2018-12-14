@@ -1,8 +1,18 @@
 
 let S3 = require('aws-sdk/clients/s3');
 let http = require('http');
+let proc = require('process');
 
 let client = new S3();
+
+let mount_point = proc.env['MOUNT_PATH'] || '';
+while (mount_point.startsWith('/')) {
+  mount_point = mount_point.substr(1);
+}
+
+if (!mount_point.endsWith('/') && mount_point.length > 0) {
+  mount_point += '/';
+}
 
 const pullAttr = (key) => (obj) => obj[key];
 
@@ -12,12 +22,13 @@ function* iterS3Dir(bucket, prefix='', recursive=false) {
   const filter = (key) => (
     key !== prefix &&
     key !== '_' &&
-    key.startsWith(prefix)
+    key.startsWith(mount_point + prefix)
   );
 
-  const popPrefix = ((n) => (key) => key.substr(n))(prefix.length);
+  const popPrefix = ((n) => (key) => key.substr(n))(
+    mount_point.length + prefix.length);
 
-  let args = { Bucket: bucket, Prefix: prefix };
+  let args = { Bucket: bucket, Prefix: mount_point + prefix };
   if (!recursive) {
     args.Delimiter = '/';
   }
@@ -114,7 +125,7 @@ const listS3Dir = async ({bucket, prefix='', recursive=false}, cb) => {
 
 const checkS3Dir = async (bucket, dir) => {
   if (dir === '/') { dir = ''; }
-  let args = { Bucket: bucket, Prefix: dir, MaxKeys: 1 };
+  let args = { Bucket: bucket, Prefix: mount_point + dir, MaxKeys: 1 };
   let { Contents: arr } = await client.listObjects(args).promise();
   return Boolean(arr.length);
 }
@@ -122,7 +133,14 @@ const checkS3Dir = async (bucket, dir) => {
 
 const checkS3Key = async (bucket, key) => {
   try {
-    await client.getObject({ Bucket: bucket, Key: key }).promise();
+    key = mount_point + key;
+    if (key.endsWith('/')) { key = key.substr(0, key.length - 1); }
+
+    await client.getObject({
+      Bucket: bucket,
+      Key: key
+    }).promise();
+
     return true;
   } catch(e) {
     return false;
@@ -147,6 +165,7 @@ let srv = http.createServer(async (req, res) => {
           'http://',
           BUCKET,
           '.s3-website.us-east-2.amazonaws.com/',
+          mount_point,
           path
         ].join('')
       }
@@ -166,6 +185,7 @@ let srv = http.createServer(async (req, res) => {
     if (doListing) {
       dirSemantics = true;
       listPath = path.substr(0, path.length - basename.length);
+      if (listPath === '') { listPath = '/'; }
     }
   }
 
@@ -186,11 +206,12 @@ let srv = http.createServer(async (req, res) => {
     res.write('<tr><th></th><th>Name</th><th>Last modified</th></tr>');
     res.write('<tr><th colspan="3"><hr></th></tr>');
 
-    if (path !== '') {
+    if (listPath !== '/') {
       res.write('<tr><td valign="top"><img src="');
       res.write('https://ftp.gnu.org/icons/back.gif" ');
       res.write('alt="[PARENTDIR]"></td><td><a href="');
-      res.write('..">Parent Directory</a></td><td>&nbsp;</td></tr>');
+      res.write(dirSemantics ? '..' : '.');
+      res.write('">Parent Directory</a></td><td>&nbsp;</td></tr>');
     }
 
     await listS3Dir({ bucket: BUCKET, prefix: listPath }, ({ name, type }) => {
