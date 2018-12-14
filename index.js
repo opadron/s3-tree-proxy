@@ -230,7 +230,7 @@ let srv = http.createServer(async (req, res) => {
   res.end();
 });
 
-srv.listen(8080, () => {
+srv.listen(8080, '0.0.0.0', () => {
   console.log('Listening on port 8080');
 });
 
